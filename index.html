@@ -326,6 +326,7 @@ function subscribe(){
   unsubs.push(F.onSnapshot(F.collection(FB.db, 'users'), q => { q.forEach(d => S.users[d.id] = d.data()); later(); }, fbErr));
   unsubs.push(F.onSnapshot(F.collection(FB.db, 'logs'), q => { S.logs = q.docs.map(d => d.data()); later(); }, fbErr));
 }
+const isCounter = a => !!a.counter || a.id === 'tasbih' || /صلا[ةه] على (محمد|النبي)|صلوات|تسبيح|ذكر|استغفار/.test(a.name || '');
 function migrateActs(){
   let ch = false; const fresh = seed().acts;
   if (!S.acts.some(a => a.id === 'salawat')) { const i = S.acts.findIndex(a => a.id === 'tasbih'); S.acts.splice(i < 0 ? S.acts.length : i + 1, 0, fresh.find(a => a.id === 'salawat')); ch = true; }
@@ -573,7 +574,7 @@ function drawRecord(){
     ${secs.length>1 && view.name!=='sec' ? `<div class="field"><label>الصفحة</label><div class="choices">${secs.map(x=>`<button class="choice ${x.id===rec.s?'on':''}" data-rs="${x.id}">${esc(x.deceased.map(d=>d.name).join('، '))}</button>`).join('')}</div></div>`:''}
     <div class="note" style="margin-bottom:12px">يُهدى ثوابه ${esc(decName(s))}</div>
     <div class="field"><label>العدد (${esc(a.unit)})</label><div class="stepper"><button data-q="-1">−</button><b>${num(rec.q)}</b><button data-q="1">+</button></div>
-      ${a.counter || a.id==='tasbih' ? `<div class="choices" style="justify-content:center">${[1,100,1000,10000].map(v=>`<button class="choice ${rec.q===v?'on':''}" data-qs="${v}">${num(v)}</button>`).join('')}</div>
+      ${isCounter(a) ? `<div class="choices" style="justify-content:center">${[1,100,1000,10000].map(v=>`<button class="choice ${rec.q===v?'on':''}" data-qs="${v}">${num(v)}</button>`).join('')}</div>
       <input id="qIn" type="number" min="1" inputmode="numeric" placeholder="أو اكتب العدد" style="width:100%;margin-top:10px;border:1.5px solid var(--line);border-radius:12px;padding:12px;text-align:center;background:#fff">` : ''}</div>
     <div class="switch"><div><b>فاعل خير</b><div class="hint">لا يظهر اسمك مع هذا الإهداء</div></div><button class="tg ${rec.anon?'on':''}" data-do="anon" aria-label="إخفاء الاسم"></button></div>
     <button class="btn" data-do="saveRec" style="margin-top:8px">سجّل الإهداء</button>`);
@@ -694,6 +695,7 @@ function formAct(id){
     <div class="field"><label>اسم العمل</label><input id="aName" placeholder="مثلاً: دعاء كميل" value="${esc(a ? a.name : '')}"></div>
     <div class="field"><label>وحدة العدّ</label><input id="aUnit" placeholder="مثلاً: مرة" value="${esc(a ? a.unit : '')}"></div>
     <div class="field"><label>الأيقونة</label><div class="choices">${icons.map(k=>`<button class="choice ${k===cur?'on':''}" data-icon="${k}" style="padding:8px">${ic(k,'i" style="width:24px;height:24px')}</button>`).join('')}</div></div>
+    <div class="switch"><div><b>عدّ سريع</b><div class="hint">أزرار ١ و١٠٠ و١٠٠٠ و١٠٠٠٠ وخانة لكتابة العدد</div></div><button class="tg ${a && isCounter(a) ? 'on' : ''}" data-do="mTog" id="aCounter"></button></div>
     <button class="btn" data-do="saveAct" data-id="${a ? a.id : ''}">حفظ</button>
     ${a ? `<button class="btn danger" style="margin-top:8px" data-do="delAct" data-id="${a.id}">حذف هذا العمل</button><p class="hint">الحذف يخفيه من القائمة، والإهداءات السابقة تبقى محسوبة.</p>` : '<p class="hint">العمل الجديد يظهر في كل الصفحات.</p>'}`);
 }
@@ -889,8 +891,9 @@ document.addEventListener('click', e => {
     case 'addAct': return formAct();
     case 'saveAct': { const n = $('#aName').value.trim(), u = $('#aUnit').value.trim() || 'مرة'; if (!n) return toast('اكتب اسم العمل');
       const icon = (document.querySelector('[data-icon].on')||{}).dataset.icon || 'star';
-      if (d.id) { const a = S.acts.find(x => x.id === d.id); Object.assign(a, {name:n, unit:u, icon}); if (!(a.kw||[]).includes(n)) a.kw = (a.kw||[]).concat(n); }
-      else S.acts.push({id:'a'+uid(), name:n, unit:u, icon, kw:[n]});
+      const counter = !!($('#aCounter') && $('#aCounter').classList.contains('on'));
+      if (d.id) { const a = S.acts.find(x => x.id === d.id); Object.assign(a, {name:n, unit:u, icon, counter}); if (!(a.kw||[]).includes(n)) a.kw = (a.kw||[]).concat(n); }
+      else S.acts.push({id:'a'+uid(), name:n, unit:u, icon, counter, kw:[n]});
       P.config(); closeSheet(); toast(d.id ? 'تم التعديل' : 'أُضيف العمل لكل الصفحات'); return render(); }
     case 'addAdmin': openSheet(`<div class="h2">مدير جديد للمشروع</div><div class="field"><label>الاسم</label><input id="adName"></div><div class="field"><label>رقم الهاتف</label><input id="adPhone" dir="ltr" inputmode="tel"></div><button class="btn" data-do="saveAdmin">حفظ</button>`); return;
     case 'saveAdmin': { const n = $('#adName').value.trim(), raw = $('#adPhone').value; if (!n || raw.replace(/\D/g,'').length<7) return toast('اكتب الاسم ورقم الهاتف');
