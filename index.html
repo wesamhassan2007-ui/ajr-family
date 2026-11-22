@@ -172,6 +172,7 @@ const ICONS = {
   people:'<circle cx="9" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20c0-3.5 2.7-6 6-6s6 2.5 6 6M15 14.5c3 0 6 2 6 5.5"/>',
   mat:'<rect x="6" y="3" width="12" height="18" rx="2"/><path d="M9 21v-6a3 3 0 016 0v6M9 7h6"/>',
   beads:'<circle cx="12" cy="5" r="1.6"/><circle cx="17" cy="7.5" r="1.6"/><circle cx="18.5" cy="12.5" r="1.6"/><circle cx="16" cy="17" r="1.6"/><circle cx="8" cy="17" r="1.6"/><circle cx="5.5" cy="12.5" r="1.6"/><circle cx="7" cy="7.5" r="1.6"/><path d="M12 18.5v3"/>',
+  moon:'<path d="M15.5 3.5a8.5 8.5 0 100 17 9.5 9.5 0 010-17z"/><path d="M17.5 8.2l.7 1.5 1.6.2-1.2 1.1.3 1.6-1.4-.8-1.4.8.3-1.6-1.2-1.1 1.6-.2z"/>',
   heart:'<path d="M12 20s-7-4.5-7-10a4 4 0 017-2.6A4 4 0 0119 10c0 5.5-7 10-7 10z"/>',
   scroll:'<path d="M7 4h11a2 2 0 012 2v1h-4M7 4a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7M7 4a2 2 0 012 2v12a2 2 0 01-2 2M11 9h5M11 13h5"/>',
   star:'<path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z"/>',
@@ -233,8 +234,9 @@ function seed(){
     {id:'sura', name:'قراءة سورة', unit:'سورة', icon:'scroll', kw:['سورة','سوره','سور','يس','ياسين']},
     {id:'ziyara', name:'زيارة بالإنابة', unit:'زيارة', icon:'dome', kw:['زيارة','زياره','زيارات','زرت']},
     {id:'majlis', name:'مجلس عزاء', unit:'مجلس', icon:'people', kw:['مجلس','مجالس','عزاء']},
-    {id:'salat', name:'قضاء صلاة', unit:'صلاة', icon:'mat', kw:['صلاة','صلاه','صلوات','صليت']},
-    {id:'tasbih', name:'تسبيح وذكر', unit:'مرة', icon:'beads', kw:['تسبيح','تسبيحة','ذكر','استغفار','صلوات على النبي']},
+    {id:'salat', name:'قضاء صلاة', unit:'صلاة', icon:'mat', kw:['قضاء صلاة','قضاء','صلاة','صلاه','صليت']},
+    {id:'tasbih', name:'تسبيح وذكر', unit:'مرة', icon:'beads', counter:true, kw:['تسبيح','تسبيحة','ذكر','استغفار']},
+    {id:'salawat', name:'الصلاة على محمد وآل محمد', unit:'مرة', icon:'moon', counter:true, kw:['الصلاة على محمد','صلاة على محمد','صلوات على محمد','الصلوات على محمد','صلوات على النبي','الصلاة على النبي','اللهم صل','صلوات','الصلوات']},
     {id:'sadaqa', name:'صدقة', unit:'صدقة', icon:'heart', kw:['صدقة','صدقه','تصدقت']}
   ];
   const sections = [
@@ -259,7 +261,7 @@ function seed(){
 }
 let S, me = null;
 if (LIVE) S = {v:1, acts:[], sections:[], users:{}, admins:[], logs:[], khatma:{}, resets:[], ready:false};
-else { try { S = JSON.parse(localStorage.getItem(LS)) } catch(e) {} if (!S || S.v !== 1) S = seed(); S.ready = true; try { me = localStorage.getItem(SS) } catch(e) {} }
+else { try { S = JSON.parse(localStorage.getItem(LS)) } catch(e) {} if (!S || S.v !== 1) S = seed(); S.ready = true; if (typeof migrateActs === 'function') migrateActs(); try { me = localStorage.getItem(SS) } catch(e) {} }
 try { S.reminders = JSON.parse(localStorage.getItem(REM)) || {on:true, day:'thu'} } catch(e) { S.reminders = {on:true, day:'thu'} }
 const save = () => { try { localStorage.setItem(REM, JSON.stringify(S.reminders)); if (!LIVE) localStorage.setItem(LS, JSON.stringify(S)) } catch(e) {} };
 const toE164 = raw => { let d = String(raw).replace(/[^\d+]/g, ''); if (d.startsWith('00')) d = '+' + d.slice(2); if (d.startsWith('+')) return d; if (d.startsWith('0')) d = d.slice(1); return COUNTRY_CODE + d; };
@@ -319,9 +321,17 @@ async function bootstrap(){
 function subscribe(){
   const F = FB.F;
   unsubs.push(F.onSnapshot(D('config', 'main'), d => { const c = d.data() || {}; S.admins = c.admins || []; S.acts = c.acts || [];
+    if (isPA() && migrateActs()) P.config();
     if (isPA() !== wasPA) { wasPA = isPA(); subSections(); subResets(); } later(); }, fbErr));
   unsubs.push(F.onSnapshot(F.collection(FB.db, 'users'), q => { q.forEach(d => S.users[d.id] = d.data()); later(); }, fbErr));
   unsubs.push(F.onSnapshot(F.collection(FB.db, 'logs'), q => { S.logs = q.docs.map(d => d.data()); later(); }, fbErr));
+}
+function migrateActs(){
+  let ch = false; const fresh = seed().acts;
+  if (!S.acts.some(a => a.id === 'salawat')) { const i = S.acts.findIndex(a => a.id === 'tasbih'); S.acts.splice(i < 0 ? S.acts.length : i + 1, 0, fresh.find(a => a.id === 'salawat')); ch = true; }
+  for (const id of ['tasbih', 'salat']) { const a = S.acts.find(x => x.id === id), f = fresh.find(x => x.id === id);
+    if (a && f && (JSON.stringify(a.kw) !== JSON.stringify(f.kw) || a.counter !== f.counter)) { a.kw = f.kw; if (f.counter) a.counter = true; ch = true; } }
+  return ch;
 }
 function subResets(){
   if (resUnsub) { resUnsub(); resUnsub = null; } S.resets = [];
@@ -563,11 +573,13 @@ function drawRecord(){
     ${secs.length>1 && view.name!=='sec' ? `<div class="field"><label>الصفحة</label><div class="choices">${secs.map(x=>`<button class="choice ${x.id===rec.s?'on':''}" data-rs="${x.id}">${esc(x.deceased.map(d=>d.name).join('، '))}</button>`).join('')}</div></div>`:''}
     <div class="note" style="margin-bottom:12px">يُهدى ثوابه ${esc(decName(s))}</div>
     <div class="field"><label>العدد (${esc(a.unit)})</label><div class="stepper"><button data-q="-1">−</button><b>${num(rec.q)}</b><button data-q="1">+</button></div>
-      ${a.id==='tasbih'?`<div class="choices" style="justify-content:center">${[33,100,1000].map(v=>`<button class="choice" data-qs="${v}">${num(v)}</button>`).join('')}</div>`:''}</div>
+      ${a.counter || a.id==='tasbih' ? `<div class="choices" style="justify-content:center">${[1,100,1000,10000].map(v=>`<button class="choice ${rec.q===v?'on':''}" data-qs="${v}">${num(v)}</button>`).join('')}</div>
+      <input id="qIn" type="number" min="1" inputmode="numeric" placeholder="أو اكتب العدد" style="width:100%;margin-top:10px;border:1.5px solid var(--line);border-radius:12px;padding:12px;text-align:center;background:#fff">` : ''}</div>
     <div class="switch"><div><b>فاعل خير</b><div class="hint">لا يظهر اسمك مع هذا الإهداء</div></div><button class="tg ${rec.anon?'on':''}" data-do="anon" aria-label="إخفاء الاسم"></button></div>
     <button class="btn" data-do="saveRec" style="margin-top:8px">سجّل الإهداء</button>`);
 }
 function saveRec(ev){
+  const qi = $('#qIn'); if (qi && qi.value) { const v = parseInt(String(qi.value).replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)), 10); if (v > 0) rec.q = v; }
   const L = {id:uid(), s:rec.s, d:rec.d, a:rec.a, q:rec.q, p:me, anon:rec.anon, ts:Date.now()}; S.logs.push(L); P.log(L);
   const a = act(rec.a); closeSheet();
   const r = ev && ev.target.getBoundingClientRect(); burst(r ? r.left + r.width/2 : innerWidth/2, r ? r.top : innerHeight/2);
@@ -577,12 +589,12 @@ function saveRec(ev){
 }
 
 /* ============ الإدخال الكتابي والصوتي ============ */
-const WORDNUM = {'واحد':1,'وحدة':1,'اثنين':2,'اتنين':2,'ثلاث':3,'تلات':3,'ثلاثة':3,'اربع':4,'اربعة':4,'خمس':5,'خمسة':5,'ست':6,'سبع':7,'ثمان':8,'تمن':8,'تسع':9,'عشر':10,'عشرة':10,'مية':100,'مئة':100};
+const WORDNUM = {'واحد':1,'وحدة':1,'اثنين':2,'اتنين':2,'ثلاث':3,'تلات':3,'ثلاثة':3,'اربع':4,'اربعة':4,'خمس':5,'خمسة':5,'ست':6,'سبع':7,'ثمان':8,'تمن':8,'تسع':9,'عشر':10,'عشرة':10,'مية':100,'مئة':100,'الف':1000,'ألف':1000};
 function parseQuick(text){
   const t = normalize(text.replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
   let q = (t.match(/\d+/)||[])[0]; q = q ? +q : null;
   if (!q) for (const w in WORDNUM) if (t.split(/\s+/).includes(normalize(w))) { q = WORDNUM[w]; break; }
-  let a = null; for (const x of S.acts) if ((x.kw||[]).concat(x.name).some(k => t.includes(normalize(k)))) { a = x; break; }
+  let a = null, best = 0; for (const x of S.acts) for (const k of (x.kw||[]).concat(x.name)) { const nk = normalize(k); if (nk && t.includes(nk) && nk.length > best) { best = nk.length; a = x; } }
   let found = null;
   for (const s of mySections()) for (const d of s.deceased) { const parts = normalize(d.name).split(/\s+/);
     const score = parts.filter(p => p.length>1 && t.includes(p)).length; if (score && (!found || score > found.score)) found = {s:s.id, d:d.id, score}; }
@@ -677,7 +689,7 @@ function formMember(s, p, addTo){
     <p class="hint">الشخص نفسه يمكن أن يكون في أكثر من صفحة، ودوره في كل صفحة مستقل: عضو في واحدة ومدير في أخرى.</p>`);
 }
 function formAct(id){
-  const icons = ['book','quran','scroll','dome','people','mat','beads','heart','star'], a = id ? act(id) : null, cur = a ? a.icon : 'book';
+  const icons = ['book','quran','scroll','dome','people','mat','beads','moon','heart','star'], a = id ? act(id) : null, cur = a ? a.icon : 'book';
   openSheet(`<div class="h2">${a ? 'تعديل العمل' : 'عمل جديد'}</div>
     <div class="field"><label>اسم العمل</label><input id="aName" placeholder="مثلاً: دعاء كميل" value="${esc(a ? a.name : '')}"></div>
     <div class="field"><label>وحدة العدّ</label><input id="aUnit" placeholder="مثلاً: مرة" value="${esc(a ? a.unit : '')}"></div>
