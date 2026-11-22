@@ -24,7 +24,7 @@ button{cursor:pointer}
 .toprow{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .iconbtn{background:rgba(255,255,255,.14);border:0;color:#fff;width:40px;height:40px;border-radius:12px;display:grid;place-items:center}
 .iconbtn svg{width:22px;height:22px}
-.pill{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.14);padding:5px 10px;border-radius:99px;font-size:13px}
+.pill{white-space:nowrap;display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.14);padding:5px 10px;border-radius:99px;font-size:13px}
 .content{padding:16px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:16px;margin-bottom:14px}
 .sec-card{display:block;width:100%;text-align:right;border:1px solid var(--line);background:var(--card);border-radius:var(--r);box-shadow:var(--shadow);padding:14px;margin-bottom:14px;color:inherit}
@@ -64,6 +64,7 @@ button{cursor:pointer}
 .dec .n{font-weight:800;font-size:14px;line-height:1.3}
 .btn{border:0;border-radius:14px;padding:12px 16px;font-weight:800;background:var(--green);color:#fff;width:100%}
 .btn.gold{background:var(--gold)}
+.btn svg{width:22px;height:22px;flex:none}
 .btn.ghost{background:transparent;color:var(--green);border:1.5px solid var(--green)}
 .btn.sm{width:auto;padding:8px 12px;font-size:14px;border-radius:10px}
 .btn.danger{background:transparent;color:var(--danger);border:1.5px solid var(--danger)}
@@ -257,7 +258,7 @@ function seed(){
   return {v:1, acts, sections, users, admins:[], logs, khatma:{s1:{round:1, juz:{3:{p:'0700000001',done:true},4:{p:'0700000002',done:false}}}, s2:{round:1,juz:{}}, s3:{round:1,juz:{}}}, reminders:{on:true, day:'thu'}};
 }
 let S, me = null;
-if (LIVE) S = {v:1, acts:[], sections:[], users:{}, admins:[], logs:[], khatma:{}, ready:false};
+if (LIVE) S = {v:1, acts:[], sections:[], users:{}, admins:[], logs:[], khatma:{}, resets:[], ready:false};
 else { try { S = JSON.parse(localStorage.getItem(LS)) } catch(e) {} if (!S || S.v !== 1) S = seed(); S.ready = true; try { me = localStorage.getItem(SS) } catch(e) {} }
 try { S.reminders = JSON.parse(localStorage.getItem(REM)) || {on:true, day:'thu'} } catch(e) { S.reminders = {on:true, day:'thu'} }
 const save = () => { try { localStorage.setItem(REM, JSON.stringify(S.reminders)); if (!LIVE) localStorage.setItem(LS, JSON.stringify(S)) } catch(e) {} };
@@ -276,22 +277,27 @@ const P = {
   khatma(x){ save(); if (FB) FB.F.updateDoc(D('sections', x.id), {khatma: S.khatma[x.id]}).catch(fbErr); },
   delSection(id){ save(); if (FB) FB.F.deleteDoc(D('sections', id)).catch(fbErr); },
   user(p){ save(); if (FB) FB.F.setDoc(D('users', p), S.users[p], {merge:true}).catch(fbErr); },
-  config(){ save(); if (FB) FB.F.setDoc(D('config', 'main'), {admins:S.admins, acts:S.acts}).catch(fbErr); }
+  config(){ save(); if (FB) FB.F.setDoc(D('config', 'main'), {admins:S.admins, acts:S.acts}).catch(fbErr); },
+  delLog(id){ save(); if (FB) FB.F.deleteDoc(D('logs', id)).catch(fbErr); },
+  delUser(p){ save(); if (FB) FB.F.deleteDoc(D('users', p)).catch(fbErr); }
 };
-let unsubs = [], secUnsub = null, wasPA = null, laterT;
+const digits = p => String(p).replace(/\D/g, '');
+const emailFor = (p, ver) => digits(p) + (ver ? '.v' + ver : '') + '@ajr-family.app';
+const phoneOf = email => '+' + String(email || '').split('@')[0].split('.')[0];
+let unsubs = [], secUnsub = null, resUnsub = null, wasPA = null, laterT;
 const later = () => { clearTimeout(laterT); laterT = setTimeout(render, 60); };
-function unsubAll(){ unsubs.forEach(f => f()); unsubs = []; if (secUnsub) secUnsub(); secUnsub = null; wasPA = null; }
+function unsubAll(){ unsubs.forEach(f => f()); unsubs = []; if (secUnsub) secUnsub(); secUnsub = null; if (resUnsub) resUnsub(); resUnsub = null; wasPA = null; }
 async function initFirebase(){
   const base = 'https://www.gstatic.com/firebasejs/10.12.2/';
   try {
     const [appM, A, F] = await Promise.all([import(base + 'firebase-app.js'), import(base + 'firebase-auth.js'), import(base + 'firebase-firestore.js')]);
     const app = appM.initializeApp(FIREBASE_CONFIG);
-    FB = {A, F, auth: A.getAuth(app), db: F.getFirestore(app)};
+    FB = {A, F, appM, auth: A.getAuth(app), db: F.getFirestore(app)};
     FB.auth.languageCode = 'ar';
     A.onAuthStateChanged(FB.auth, async u => {
       unsubAll();
       if (!u) { me = null; S.ready = true; render(); return; }
-      me = '+' + String(u.email || '').split('@')[0]; S.ready = false; render();
+      me = phoneOf(u.email); S.ready = false; render();
       try {
         if (login.name) { S.users[me] = {name: login.name}; await F.setDoc(D('users', me), {name: login.name}, {merge:true}); }
         const c = await F.getDoc(D('config', 'main'));
@@ -313,9 +319,14 @@ async function bootstrap(){
 function subscribe(){
   const F = FB.F;
   unsubs.push(F.onSnapshot(D('config', 'main'), d => { const c = d.data() || {}; S.admins = c.admins || []; S.acts = c.acts || [];
-    if (isPA() !== wasPA) { wasPA = isPA(); subSections(); } later(); }, fbErr));
+    if (isPA() !== wasPA) { wasPA = isPA(); subSections(); subResets(); } later(); }, fbErr));
   unsubs.push(F.onSnapshot(F.collection(FB.db, 'users'), q => { q.forEach(d => S.users[d.id] = d.data()); later(); }, fbErr));
   unsubs.push(F.onSnapshot(F.collection(FB.db, 'logs'), q => { S.logs = q.docs.map(d => d.data()); later(); }, fbErr));
+}
+function subResets(){
+  if (resUnsub) { resUnsub(); resUnsub = null; } S.resets = [];
+  if (!isPA()) return;
+  resUnsub = FB.F.onSnapshot(FB.F.collection(FB.db, 'resets'), q => { S.resets = q.docs.map(d => d.data()); later(); }, fbErr);
 }
 function subSections(){
   const F = FB.F; if (secUnsub) secUnsub();
@@ -342,7 +353,8 @@ const mySections = () => isPA() ? S.sections : S.sections.filter(s => s.members.
 const decName = (s) => (s.deceased.length > 1 ? 'لأرواح ' : 'لروح ') + s.deceased.map(x => x.t + ' ' + x.name).join(' و');
 const ago = ts => { const m = Math.round((Date.now()-ts)/60000); if (m < 1) return 'الآن'; if (m < 60) return `قبل ${num(m)} دقيقة`; const h = Math.round(m/60); if (h < 24) return `قبل ${num(h)} ساعة`; return `قبل ${num(Math.round(h/24))} يوم`; };
 const totals = (sid) => { const t = {}; S.logs.filter(l => !sid || l.s === sid).forEach(l => t[l.a] = (t[l.a]||0) + l.q); return t; };
-const avatar = (d, cls='') => `<div class="av ${cls}">${d.photo ? `<img src="${d.photo}" alt="">` : esc((d.name||'؟').trim()[0])}</div>`;
+const STAR8 = '<svg viewBox="-12 -12 24 24" style="width:58%;height:58%"><polygon points="0,-10 2.6,-6.3 7.1,-7.1 6.3,-2.6 10,0 6.3,2.6 7.1,7.1 2.6,6.3 0,10 -2.6,6.3 -7.1,7.1 -6.3,2.6 -10,0 -6.3,-2.6 -7.1,-7.1 -2.6,-6.3" fill="none" stroke="currentColor" stroke-width="1.4"/><circle r="2.6" fill="currentColor"/></svg>';
+const avatar = (d, cls='') => `<div class="av ${cls}">${d.photo ? `<img src="${d.photo}" alt="">` : STAR8}</div>`;
 const normalize = s => s.replace(/[أإآ]/g,'ا').replace(/ة/g,'ه').replace(/ى/g,'ي').replace(/[ً-ْـ]/g,'');
 
 function toast(msg){ const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(()=>t.classList.remove('on'), 2400); }
@@ -372,9 +384,13 @@ function renderLogin(){
       <div class="field"><label>رقم الهاتف</label><input id="lgPhone" inputmode="tel" dir="ltr" placeholder="مثلاً 03123456" value="${esc(login.raw||'')}"></div>
       <div class="field"><label>رمزك السري</label><input id="lgPin" type="password" inputmode="numeric" dir="ltr" placeholder="٤ إلى ٦ أرقام" maxlength="6"></div>
       <button class="btn" data-do="login">دخول</button>
-      <p class="hint" style="margin-bottom:0">أول مرة؟ اختر رمزاً سرياً واحفظه. بعدها يبقى دخولك محفوظاً على هذا الهاتف ولا يُطلب منك مرة أخرى.</p>
     </div>
-    <p class="hint center">نسيت رمزك؟ تواصل مع مدير المشروع.</p>
+    <div class="card"><div class="h2">كيف أدخل؟</div>
+      <div class="list-item"><span class="badge admin">١</span><div class="grow hint" style="color:var(--ink)">اكتب اسمك و<b>رقم هاتفك</b>، نفس الرقم الذي أضافه مدير صفحة عائلتك.</div></div>
+      <div class="list-item"><span class="badge admin">٢</span><div class="grow hint" style="color:var(--ink)">أول مرة: <b>اختر رمزاً سرياً</b> من ٤ إلى ٦ أرقام واحفظه، ستحتاجه إذا دخلت من هاتف آخر.</div></div>
+      <div class="list-item"><span class="badge admin">٣</span><div class="grow hint" style="color:var(--ink)">يبقى دخولك محفوظاً على هذا الهاتف، وتظهر لك صفحات عائلتك مباشرة.</div></div></div>
+    <button class="btn ghost" data-do="forgot" style="margin-bottom:10px">نسيت رمزي السري</button>
+    <p class="hint center">لا تظهر لك صفحتك؟ تواصل مع مدير الصفحة ليتأكد من رقمك.</p>
   </div>`;
 }
 
@@ -389,8 +405,17 @@ function renderHome(){
     <div class="big-total"><div><b>${num(all)}</b><span>عمل مُهدى</span></div><div><b>${num(t.juz||0)}</b><span>جزء قرآن</span></div><div><b>${num(mine)}</b><span>إهداءاتي</span></div></div>
   </div>
   <div class="content">
+    <details class="card" style="padding:12px 16px"><summary style="font-weight:800;cursor:pointer;color:var(--green)">كيف أستخدم الصفحة؟</summary>
+      <div class="hint" style="color:var(--ink);line-height:1.9;margin-top:8px">
+      <b>١. ادخل صفحة المرحوم</b> من القائمة أدناه.<br>
+      <b>٢. اضغط على العمل</b> الذي أديته: فاتحة، جزء، زيارة، مجلس، صلاة، تسبيح…<br>
+      <b>٣. اختر العدد واضغط "سجّل الإهداء"</b>، ويُهدى لكل من في الصفحة.<br>
+      <b>٤. الختمة:</b> من تبويب الختمة احجز جزءاً، وبعد قراءته اضغط عليه مرة ثانية.<br>
+      <b>٥. أو اكتب مباشرة</b> في الخانة: "قرأت ٣ فاتحة".<br>
+      <b>فاعل خير:</b> فعّله إذا لم تُرد أن يظهر اسمك.</div></details>
+    ${isPA() && (S.resets||[]).length ? `<button class="sec-card" data-go="settings" style="background:var(--goldSoft);border-color:var(--gold)"><b>${num(S.resets.length)} ${S.resets.length>1?'طلبات':'طلب'} رمز سري جديد</b><div class="hint">اضغط للرد عليها من الإعدادات</div></button>` : ''}
     ${quickBar()}
-    ${list.length ? '' : `<div class="card empty">لم تُضف بعد إلى أي صفحة. اطلب من مدير الصفحة إضافة رقمك.</div>`}
+    ${list.length ? '' : `<div class="card empty">لم تُضف بعد إلى أي صفحة.<br>اطلب من مدير الصفحة إضافة رقمك <b dir="ltr">${esc(me)}</b>، ثم أعد فتح الرابط.</div>`}
     ${list.map(s => { const tt = totals(s.id); const sum = Object.values(tt).reduce((a,b)=>a+b,0); const role = myRole(s);
       return `<button class="sec-card" data-go="sec" data-id="${s.id}">
         <div class="sec-head"><div class="avatars">${s.deceased.slice(0,3).map(d=>avatar(d)).join('')}</div>
@@ -423,13 +448,43 @@ function renderSection(){
   <div class="tabs">${tabs.map(([k,v]) => `<button class="tab ${tab===k?'on':''}" data-tab="${k}">${v}</button>`).join('')}</div>
   <div class="content">
     ${tab==='acts' ? `${quickBar()}<div class="acts">${S.acts.map(a => `<button class="act" data-rec="${a.id}">${tt[a.id]?`<span class="cnt">${num(tt[a.id])}</span>`:''}<div class="ic">${ic(a.icon)}</div><b>${esc(a.name)}</b><small>اضغط للإهداء</small></button>`).join('')}</div>
-            <a class="btn gold" style="margin-top:14px;display:flex;gap:8px;justify-content:center;text-decoration:none;align-items:center" href="${waLink(s)}" target="_blank" rel="noopener">${ic('wa')} أرسل تذكيراً على واتساب</a>` : ''}
+            ${canManage(s) ? `<button class="btn gold" style="margin-top:14px;display:flex;gap:8px;justify-content:center;align-items:center" data-do="groupMsg">${ic('wa')} رسالة لجروب العائلة</button>` : ''}` : ''}
     ${tab==='khatma' ? renderKhatma(s) : ''}
     ${tab==='quran' ? renderQuran(s) : ''}
     ${tab==='feed' ? renderFeed(s) : ''}
     ${tab==='members' ? renderMembers(s) : ''}
   </div>`;
 }
+
+const pron = s => s.deceased.length > 1 ? 'لأرواحهم' : (['الحاجة','المرحومة','الشهيدة'].includes(s.deceased[0].t) ? 'لروحها' : 'لروحه');
+const namesOf = s => s.deceased.map(d => d.t + ' ' + d.name).join(' و');
+const preOf = s => s.deceased.length > 1 ? 'لأرواح' : 'لروح';
+const TPLS = [['fatiha','الفاتحة'],['act','عمل معيّن'],['friday','ليلة الجمعة'],['khatma','الختمة'],['anniv','ذكرى الوفاة'],['stats','الإحصاءات']];
+function tplText(kind, s, actId){
+  const n = namesOf(s), pre = preOf(s), tt = totals(s.id), sum = Object.values(tt).reduce((a,b)=>a+b,0);
+  const k = S.khatma[s.id] || {round:1, juz:{}}, done = Object.values(k.juz).filter(j => j.done).length;
+  const link = APP_URL ? '\n' + APP_URL : '';
+  switch (kind) {
+    case 'act': return `🤍 دعوة اليوم\nندعوكم إلى ${act(actId).name} ${pre} ${n}، ولو مرة واحدة.\nسجّلوها هنا ليُحصى الأجر:${link}`;
+    case 'friday': return `🌙 ليلة جمعة مباركة\nأهدوا ثواب عمل صالح ${pre} ${n}: فاتحة، أو سورة يس، أو تسبيح.\nوسجّلوه هنا:${link}`;
+    case 'khatma': return `📖 الختمة رقم ${num(k.round)} ${pre} ${n}\nقُرئ ${num(done)} من ٣٠ جزءاً، وبقي ${num(30 - done)}.\nاحجز جزءك من هنا:${link}`;
+    case 'anniv': return `🕊 في ذكرى رحيل ${n}\nنسألكم قراءة الفاتحة وإهداء عمل صالح ${pron(s)}.\nرحم الله من قرأ وأهدى.${link}`;
+    case 'stats': return `🤍 حتى الآن أُهدي ${pre} ${n} ${num(sum)} عملاً، منها ${num(tt.fatiha || 0)} فاتحة و${num(tt.juz || 0)} جزء قرآن.\nجزاكم الله خيراً، وشاركونا الأجر:${link}`;
+    default: return `🤍 تذكير محبّة\nلا تنسوا قراءة سورة الفاتحة ${pre} ${n}.\nسجّلوا قراءتكم هنا ليُحصى الأجر:${link}`;
+  }
+}
+let gm = {kind:'fatiha', act:'fatiha'};
+function formGroup(){
+  const s = sec(view.id);
+  openSheet(`<div class="h2">رسالة لجروب العائلة</div>
+    <div class="field"><label>نوع الرسالة</label><div class="choices">${TPLS.map(([k,v]) => `<button class="choice ${gm.kind===k?'on':''}" data-tpl="${k}">${v}</button>`).join('')}</div></div>
+    ${gm.kind === 'act' ? `<div class="field"><label>العمل</label><select id="gAct">${S.acts.map(a => `<option value="${a.id}" ${a.id===gm.act?'selected':''}>${esc(a.name)}</option>`).join('')}</select></div>` : ''}
+    <div class="field"><label>نص الرسالة (يمكنك تعديله)</label><textarea id="gText" rows="7" style="line-height:1.7">${esc(tplText(gm.kind, s, gm.act))}</textarea></div>
+    <div class="row"><button class="btn" data-do="sendWa" style="display:flex;gap:8px;justify-content:center;align-items:center">${ic('wa')} واتساب</button>
+    <button class="btn ghost" data-do="sendViber">فايبر</button></div>
+    <p class="hint">يفتح التطبيق والرسالة جاهزة. اختر جروب العائلة واضغط إرسال، فتصل للجميع.</p>`);
+}
+function openExt(url){ const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); }
 
 function waLink(s){
   const names = s.deceased.map(d => d.t+' '+d.name).join(' و');
@@ -455,7 +510,7 @@ function renderFeed(s){
   const logs = S.logs.filter(l => l.s === s.id).sort((a,b)=>b.ts-a.ts).slice(0,40);
   if (!logs.length) return `<div class="card empty">لا إهداءات بعد. كن أول من يُهدي.</div>`;
   return `<div class="card feed">${logs.map(l => { const a = act(l.a);
-    return `<div class="list-item"><div class="ic">${ic(a.icon)}</div><div class="grow"><div class="tx"><b>${l.anon?'فاعل خير':esc(uname(l.p))}</b> أهدى ${num(l.q)} ${esc(a.unit)} ${esc(decName(s))}</div><div class="tm">${ago(l.ts)}</div></div></div>`; }).join('')}</div>`;
+    return `<div class="list-item"><div class="ic">${ic(a.icon)}</div><div class="grow"><div class="tx"><b>${l.anon?'فاعل خير':esc(uname(l.p))}</b> أهدى ${num(l.q)} ${esc(a.unit)} ${esc(decName(s))}</div><div class="tm">${ago(l.ts)}</div></div>${isPA() ? `<button class="btn sm ghost" data-log="${l.id}">تعديل</button>` : ''}</div>`; }).join('')}</div>`;
 }
 
 function renderMembers(s){
@@ -464,8 +519,8 @@ function renderMembers(s){
   ${s.members.map(m => { const cnt = S.logs.filter(l=>l.s===s.id&&l.p===m.p).length;
     return `<div class="list-item"><div class="av sm">${esc(uname(m.p)[0])}</div><div class="grow"><b>${esc(uname(m.p))}</b><div class="hint"><span dir="ltr">${esc(m.p)}</span>${(() => { const n = S.sections.filter(x => x.id !== s.id && x.members.some(y => y.p === m.p)).length; return n ? ` · وفي ${num(n)} ${n > 1 ? 'صفحات أخرى' : 'صفحة أخرى'}` : ''; })()}</div></div>
     <span class="badge ${m.role==='admin'?'admin':''}">${m.role==='admin'?'مدير':'عضو'}</span>
-    ${cm && m.p!==me ? `<button class="btn sm ghost" data-member="${esc(m.p)}">تعديل</button>`:''}</div>`; }).join('')}
-  </div><p class="hint">العضو يسجّل إنجازه فقط. المدير يضيف الأعضاء ويعدّل محتوى الصفحة. يمكن للشخص نفسه أن يكون عضواً في أكثر من صفحة.</p>`;
+    ${isPA() && m.p!==me ? `<button class="btn sm ghost" data-member="${esc(m.p)}">تعديل</button>`:''}</div>`; }).join('')}
+  </div><p class="hint">العضو يسجّل إنجازه فقط. مدير الصفحة يضيف أعضاء جدداً. تعديل الأسماء والإهداءات وحذفها لمدير المشروع فقط.</p>`;
 }
 
 /* ============ القرآن ============ */
@@ -555,12 +610,14 @@ function renderSettings(){
       <div class="field"><label>يوم التذكير</label><select id="remDay">${[['thu','ليلة الجمعة'],['fri','يوم الجمعة'],['daily','كل يوم']].map(([k,v])=>`<option value="${k}" ${S.reminders.day===k?'selected':''}>${v}</option>`).join('')}</select></div>
       <button class="btn ghost" data-do="notif">تفعيل الإشعارات على هذا الهاتف</button>
       <p class="hint">على آيفون: أضف الصفحة إلى الشاشة الرئيسية أولاً (زر المشاركة ← إضافة إلى الشاشة الرئيسية).</p></div>
-    ${isPA() ? `<div class="card"><div class="h2">أنواع الأعمال</div>
-      ${S.acts.map(a=>`<div class="list-item"><div class="act" style="padding:0;border:0;box-shadow:none;background:none"><div class="ic" style="width:40px;height:40px;margin:0">${ic(a.icon)}</div></div><div class="grow"><b>${esc(a.name)}</b><div class="hint">الوحدة: ${esc(a.unit)}</div></div></div>`).join('')}
+    ${isPA() ? `<div class="card" id="resets"><div class="h2">طلبات رمز سري جديد ${(S.resets||[]).length ? `<span class="chip">${num(S.resets.length)}</span>` : ''}</div>
+      ${(S.resets||[]).length ? S.resets.slice().sort((a,b)=>a.ts-b.ts).map(r => `<div class="list-item"><div class="av sm">${esc((r.name||'؟')[0])}</div><div class="grow"><b>${esc(r.name)}</b><div class="hint"><span dir="ltr">${esc(r.phone)}</span> · ${ago(r.ts)}</div></div><button class="btn sm" data-do="resetPin" data-p="${esc(r.phone)}" data-n="${esc(r.name)}">رمز جديد</button></div>`).join('') : '<div class="empty">لا طلبات</div>'}</div>
+      <div class="card"><div class="h2">أنواع الأعمال</div>
+      ${S.acts.map(a=>`<div class="list-item" data-actedit="${a.id}" style="cursor:pointer"><div class="act" style="padding:0;border:0;box-shadow:none;background:none"><div class="ic" style="width:40px;height:40px;margin:0">${ic(a.icon)}</div></div><div class="grow"><b>${esc(a.name)}</b><div class="hint">الوحدة: ${esc(a.unit)}</div></div><span class="hint">تعديل</span></div>`).join('')}
       <button class="btn ghost" style="margin-top:10px" data-do="addAct">＋ إضافة عمل جديد</button></div>
       <div class="card"><div class="h2">كل الأعضاء</div>${(() => { const ph = [...new Set(S.sections.flatMap(x => x.members.map(m => m.p)))];
         return ph.length ? ph.map(p => { const n = S.sections.filter(x => x.members.some(m => m.p === p)).length;
-          return `<div class="list-item"><div class="av sm">${esc(uname(p)[0])}</div><div class="grow"><b>${esc(uname(p))}</b><div class="hint">في ${num(n)} ${n > 1 ? 'صفحات' : 'صفحة'}</div></div>${p !== me ? `<button class="btn sm ghost" data-person="${esc(p)}">الصفحات</button>` : ''}</div>`; }).join('') : '<div class="empty">لا أعضاء بعد</div>'; })()}</div>
+          return `<div class="list-item"><div class="av sm">${esc(uname(p)[0])}</div><div class="grow"><b>${esc(uname(p))}</b><div class="hint">في ${num(n)} ${n > 1 ? 'صفحات' : 'صفحة'}</div></div>${p !== me ? `<button class="btn sm ghost" data-person="${esc(p)}">تعديل</button>` : ''}</div>`; }).join('') : '<div class="empty">لا أعضاء بعد</div>'; })()}</div>
       <div class="card"><div class="h2">مدراء المشروع</div>${S.admins.map(p=>`<div class="list-item"><div class="av sm">${esc(uname(p)[0])}</div><div class="grow"><b>${esc(uname(p))}</b></div><span class="badge admin">مدير المشروع</span></div>`).join('')}
       <button class="btn ghost" style="margin-top:10px" data-do="addAdmin">＋ إضافة مدير للمشروع</button></div>` : ''}
     ${LIVE ? '' : `<div class="card"><div class="h2">النسخة التجريبية</div><p class="hint">البيانات هنا محفوظة على هذا الجهاز فقط للتجربة. في النسخة النهائية تُحفظ في السحابة ويراها كل الأعضاء.</p>
@@ -570,6 +627,7 @@ function renderSettings(){
 
 /* ============ نماذج الإدارة ============ */
 const TITLES = ['الشهيد','الحاج','الحاجة','المرحوم','المرحومة','الشهيدة'];
+function confirmTwice(el, msg){ if (el.dataset.sure) return true; el.dataset.sure = 1; el.textContent = msg; return false; }
 function formSection(s){
   const ds = s ? s.deceased : [{id:uid(), t:'المرحوم', name:'', photo:''}];
   openSheet(`<div class="h2">${s?'تعديل الصفحة':'صفحة جديدة'}</div>
@@ -609,21 +667,62 @@ function formMember(s, p, addTo){
   openSheet(`<div class="h2">${isNew ? 'إضافة عضو' : 'العضو وصفحاته'}</div>
     ${isNew && people.length ? `<div class="field"><label>شخص مسجّل في صفحة أخرى؟</label><select id="mPick"><option value="">شخص جديد</option>${people.map(([ph,u]) => `<option value="${esc(ph)}">${esc(u.name)}</option>`).join('')}</select></div>` : ''}
     <div class="field"><label>الاسم</label><input id="mName" value="${esc(p ? uname(p) : '')}"></div>
-    <div class="field"><label>رقم الهاتف</label><input id="mPhone" dir="ltr" inputmode="tel" value="${esc(p || '')}" ${p ? 'disabled' : ''}></div>
+    <div class="field"><label>رقم الهاتف</label><input id="mPhone" dir="ltr" inputmode="tel" value="${esc(p || '')}" ${p && !isPA() ? 'disabled' : ''}></div>
     <div class="field"><label>الصفحات التي ينتمي إليها</label>${manage.map(x => { const m = x.members.find(y => y.p === p); const on = m || x.id === addTo;
       return `<div class="list-item mrow" data-sid="${x.id}"><button class="tg ${on ? 'on' : ''}" data-do="mTog" aria-label="عضو في هذه الصفحة"></button>
         <div class="grow" style="font-size:14px;font-weight:700">${esc(x.deceased.map(d => d.t + ' ' + d.name).join('، '))}</div>
         <select class="mrole" style="width:auto;flex:none;border:1.5px solid var(--line);border-radius:10px;padding:6px 8px;background:#fff"><option value="member">عضو</option><option value="admin" ${m && m.role === 'admin' ? 'selected' : ''}>مدير</option></select></div>`; }).join('')}</div>
     <button class="btn" data-do="saveMember" data-p="${esc(p || '')}">حفظ</button>
+    ${p && isPA() ? `<button class="btn ghost" style="margin-top:8px" data-do="resetPin" data-p="${esc(p)}">إعطاؤه رمزاً سرياً جديداً</button>` : ''}
     <p class="hint">الشخص نفسه يمكن أن يكون في أكثر من صفحة، ودوره في كل صفحة مستقل: عضو في واحدة ومدير في أخرى.</p>`);
 }
-function formAct(){
-  const icons = ['book','quran','scroll','dome','people','mat','beads','heart','star'];
-  openSheet(`<div class="h2">عمل جديد</div>
-    <div class="field"><label>اسم العمل</label><input id="aName" placeholder="مثلاً: دعاء كميل"></div>
-    <div class="field"><label>وحدة العدّ</label><input id="aUnit" placeholder="مثلاً: مرة"></div>
-    <div class="field"><label>الأيقونة</label><div class="choices">${icons.map((k,i)=>`<button class="choice ${i===0?'on':''}" data-icon="${k}" style="padding:8px">${ic(k,'i" style="width:24px;height:24px')}</button>`).join('')}</div></div>
-    <button class="btn" data-do="saveAct">حفظ</button><p class="hint">العمل الجديد يظهر في كل الصفحات.</p>`);
+function formAct(id){
+  const icons = ['book','quran','scroll','dome','people','mat','beads','heart','star'], a = id ? act(id) : null, cur = a ? a.icon : 'book';
+  openSheet(`<div class="h2">${a ? 'تعديل العمل' : 'عمل جديد'}</div>
+    <div class="field"><label>اسم العمل</label><input id="aName" placeholder="مثلاً: دعاء كميل" value="${esc(a ? a.name : '')}"></div>
+    <div class="field"><label>وحدة العدّ</label><input id="aUnit" placeholder="مثلاً: مرة" value="${esc(a ? a.unit : '')}"></div>
+    <div class="field"><label>الأيقونة</label><div class="choices">${icons.map(k=>`<button class="choice ${k===cur?'on':''}" data-icon="${k}" style="padding:8px">${ic(k,'i" style="width:24px;height:24px')}</button>`).join('')}</div></div>
+    <button class="btn" data-do="saveAct" data-id="${a ? a.id : ''}">حفظ</button>
+    ${a ? `<button class="btn danger" style="margin-top:8px" data-do="delAct" data-id="${a.id}">حذف هذا العمل</button><p class="hint">الحذف يخفيه من القائمة، والإهداءات السابقة تبقى محسوبة.</p>` : '<p class="hint">العمل الجديد يظهر في كل الصفحات.</p>'}`);
+}
+function formLog(id){
+  const l = S.logs.find(x => x.id === id); if (!l) return;
+  openSheet(`<div class="h2">تعديل إهداء</div>
+    <p class="hint">${l.anon ? 'فاعل خير' : esc(uname(l.p))} · ${ago(l.ts)}</p>
+    <div class="field"><label>العمل</label><select id="eAct">${S.acts.map(a => `<option value="${a.id}" ${a.id===l.a?'selected':''}>${esc(a.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>العدد</label><input id="eQty" type="number" min="1" inputmode="numeric" value="${l.q}"></div>
+    <div class="field"><label>الصفحة</label><select id="eSec">${S.sections.map(x => `<option value="${x.id}" ${x.id===l.s?'selected':''}>${esc(namesOf(x))}</option>`).join('')}</select></div>
+    <div class="switch"><b>فاعل خير</b><button class="tg ${l.anon?'on':''}" data-do="mTog" id="eAnon"></button></div>
+    <button class="btn" data-do="saveLog" data-id="${l.id}">حفظ التعديل</button>
+    <button class="btn danger" style="margin-top:8px" data-do="delLog" data-id="${l.id}">حذف هذا الإهداء</button>`);
+}
+function formJuz(n){
+  const s = sec(view.id), j = S.khatma[s.id].juz[n];
+  openSheet(`<div class="h2">الجزء ${num(n)}</div>
+    <p class="hint">${j.done ? 'قرأه' : 'حجزه'} ${esc(uname(j.p))}</p>
+    ${j.done ? `<button class="btn ghost" data-do="juzUndo" data-n="${n}">إرجاعه غير مقروء</button>` : `<button class="btn" data-do="juzDone" data-n="${n}">تعليمه مقروءاً</button>`}
+    <button class="btn danger" style="margin-top:8px" data-do="juzFree" data-n="${n}">إلغاء الحجز وإتاحته للجميع</button>`);
+}
+function formForgot(){
+  openSheet(`<div class="h2">نسيت رمزي السري</div>
+    <div class="field"><label>الاسم</label><input id="fName" value="${esc(($('#lgName')||{}).value || '')}"></div>
+    <div class="field"><label>رقم الهاتف</label><input id="fPhone" dir="ltr" inputmode="tel" value="${esc(($('#lgPhone')||{}).value || '')}"></div>
+    <button class="btn" data-do="sendForgot">اطلب رمزاً جديداً</button>
+    <p class="hint">يصل طلبك لمدير المشروع، ويرسل لك رمزاً جديداً على الواتساب خلال ٢٤ ساعة. رمزك القديم يتوقف عن العمل.</p>`);
+}
+function formReset(p, name){
+  const pin = String(Math.floor(1000 + Math.random() * 9000));
+  openSheet(`<div class="h2">رمز سري جديد</div>
+    <p class="hint"><b>${esc(name || uname(p))}</b> · <span dir="ltr">${esc(p)}</span></p>
+    <div class="field"><label>الرمز الجديد</label><input id="rPin" dir="ltr" inputmode="numeric" maxlength="6" value="${pin}"></div>
+    <button class="btn" data-do="doReset" data-p="${esc(p)}" data-n="${esc(name || uname(p))}">حفظ الرمز الجديد</button>
+    <p class="hint">بعد الحفظ يتوقف الرمز القديم، وتظهر لك رسالة جاهزة لإرسالها له على الواتساب.</p>`);
+}
+function sentReset(p, name, pin){
+  const msg = `السلام عليكم ${name}\nرمزك السري الجديد لصفحة أعمال صالحة لأرواح أحبّتنا: ${pin}\nادخل برقم هاتفك وهذا الرمز:${APP_URL ? '\n' + APP_URL : ''}`;
+  openSheet(`<div class="h2">تم تغيير الرمز</div>
+    <p class="hint">الرمز الجديد لـ <b>${esc(name)}</b>: <b dir="ltr" style="font-size:20px">${esc(pin)}</b></p>
+    <a class="btn" style="display:flex;gap:8px;justify-content:center;align-items:center;text-decoration:none" href="https://wa.me/${digits(p)}?text=${encodeURIComponent(msg)}" target="_blank" rel="noopener">${ic('wa')} أرسله له على الواتساب</a>`);
 }
 
 /* ============ العرض ============ */
@@ -642,7 +741,7 @@ function render(){
 
 /* ============ الأحداث ============ */
 document.addEventListener('click', e => {
-  const el = e.target.closest('[data-go],[data-do],[data-tab],[data-rec],[data-juz],[data-surah],[data-ayah],[data-rs],[data-rd],[data-q],[data-qs],[data-member],[data-person],[data-role],[data-icon]');
+  const el = e.target.closest('[data-go],[data-do],[data-tab],[data-rec],[data-juz],[data-surah],[data-ayah],[data-rs],[data-rd],[data-q],[data-qs],[data-member],[data-person],[data-role],[data-icon],[data-tpl],[data-log],[data-actedit]');
   if (!el) return; const d = el.dataset;
   if (d.go) return go({name:d.go, id:d.id});
   if (d.tab) { view.tab = d.tab; return render(); }
@@ -655,12 +754,16 @@ document.addEventListener('click', e => {
   if (d.ayah !== undefined) { quranSel.a = quranSel.a === +d.ayah ? null : +d.ayah; return render(); }
   if (d.role) { el.parentNode.querySelectorAll('.choice').forEach(c=>c.classList.remove('on')); el.classList.add('on'); return; }
   if (d.icon) { el.parentNode.querySelectorAll('.choice').forEach(c=>c.classList.remove('on')); el.classList.add('on'); return; }
+  if (d.tpl) { const ga = $('#gAct'); if (ga) gm.act = ga.value; gm.kind = d.tpl; return formGroup(); }
+  if (d.log) return formLog(d.log);
+  if (d.actedit) return formAct(d.actedit);
   if (d.member) return formMember(sec(view.id), d.member);
   if (d.person) return formMember(null, d.person);
   if (d.juz) {
     const s = sec(view.id), k = S.khatma[s.id], j = k.juz[d.juz];
+    if (isPA() && j && !(j.p === me && !j.done)) return formJuz(+d.juz);
     if (!j) { k.juz[d.juz] = {p:me, done:false}; P.juz(s, d.juz); toast(`حجزت الجزء ${num(d.juz)}، بارك الله فيك`); }
-    else if (j.p === me && !j.done) { j.done = true; const L = {id:uid(), s:s.id, d:'all', a:'juz', q:1, p:me, anon:false, ts:Date.now()}; S.logs.push(L); P.log(L);
+    else if (j.p === me && !j.done) { j.done = true; const L = {id:uid(), s:s.id, d:'all', a:'juz', q:1, p:me, anon:false, ts:Date.now(), juz:+d.juz, round:k.round}; S.logs.push(L); P.log(L);
       const r = el.getBoundingClientRect(); burst(r.left+r.width/2, r.top);
       if (Object.values(k.juz).filter(x=>x.done).length === 30) { k.history = (k.history||0)+1; k.round++; k.juz = {}; P.khatma(s); toast('الله أكبر! تمّت الختمة، تقبّل الله من الجميع'); }
       else { P.juz(s, d.juz); toast(`تقبّل الله، الجزء ${num(d.juz)} مقروء`); } }
@@ -677,11 +780,18 @@ document.addEventListener('click', e => {
         if (!S.admins.length) { S.admins.push(p); S.sections.forEach(x => { if (!x.members.some(m=>m.p===p)) x.members.unshift({p, role:'admin'}); }); }
         me = p; try { localStorage.setItem(SS, p) } catch(x) {} save(); toast('أهلاً بك'); return go({name:'home'}); }
       el.disabled = true; el.textContent = 'جارٍ الدخول…';
-      const email = p.replace('+', '') + '@ajr-family.app', pw = 'ajr#' + pin, A = FB.A;
-      A.signInWithEmailAndPassword(FB.auth, email, pw).catch(err => {
-        if (['auth/invalid-credential','auth/user-not-found','auth/invalid-login-credentials'].includes(err.code))
-          return A.createUserWithEmailAndPassword(FB.auth, email, pw).catch(e2 => { throw e2.code === 'auth/email-already-in-use' ? {code:'wrong-pin'} : e2; });
-        throw err; })
+      const A = FB.A, pw = 'ajr#' + pin, BAD = ['auth/invalid-credential','auth/user-not-found','auth/invalid-login-credentials','auth/wrong-password'];
+      (async () => {
+        let ver = 0; try { const g = await FB.F.getDoc(D('logins', p)); if (g.exists()) ver = g.data().ver || 0; } catch(x) {}
+        const email = emailFor(p, ver);
+        try { await A.signInWithEmailAndPassword(FB.auth, email, pw); }
+        catch(err) {
+          if (!BAD.includes(err.code)) throw err;
+          if (ver) throw {code:'wrong-pin'};
+          try { await A.createUserWithEmailAndPassword(FB.auth, email, pw); }
+          catch(e2) { throw e2.code === 'auth/email-already-in-use' ? {code:'wrong-pin'} : e2; }
+        }
+      })()
       .then(() => toast('أهلاً بك'))
       .catch(err => { toast(err.code === 'wrong-pin' ? 'الرمز السري غير صحيح' : err.code === 'auth/too-many-requests' ? 'محاولات كثيرة، انتظر قليلاً' : 'تعذّر الدخول: ' + (err.code || '')); render(); });
       return; }
@@ -698,9 +808,16 @@ document.addEventListener('click', e => {
     case 'delSection': if (el.dataset.sure) { S.sections = S.sections.filter(s=>s.id!==d.id); P.delSection(d.id); closeSheet(); return go({name:'home'}); }
       el.dataset.sure = 1; el.textContent = 'اضغط مرة أخرى للتأكيد'; return;
     case 'addMember': return formMember(sec(view.id), null);
-    case 'saveMember': { const name = $('#mName').value.trim(), raw = d.p || $('#mPhone').value, p = d.p || toE164(raw);
+    case 'saveMember': { const name = $('#mName').value.trim(), raw = (d.p && !isPA()) ? d.p : $('#mPhone').value, p = toE164(raw);
       if (!name || String(raw).replace(/\D/g,'').length < 7) return toast('اكتب الاسم ورقم الهاتف');
-      S.users[p] = Object.assign({}, S.users[p], {name}); P.user(p);
+      if (d.p && p !== d.p) { const old = d.p;
+        if (S.users[p] && !confirmTwice(el, 'هذا الرقم مسجّل لشخص آخر، اضغط مرة أخرى للدمج')) return;
+        S.users[p] = Object.assign({}, S.users[old], S.users[p]); delete S.users[old]; P.delUser(old);
+        S.sections.forEach(x => { let ch = false; x.members.forEach(m => { if (m.p === old) { m.p = p; ch = true; } });
+          Object.values((S.khatma[x.id]||{}).juz||{}).forEach(j => { if (j.p === old) { j.p = p; ch = true; } }); if (ch) P.section(x); });
+        S.logs.forEach(l => { if (l.p === old) { l.p = p; P.log(l); } });
+        if (S.admins.includes(old)) { S.admins = S.admins.map(a => a === old ? p : a); P.config(); } }
+      if (isPA() || !S.users[p]) { S.users[p] = Object.assign({}, S.users[p], {name}); P.user(p); }
       document.querySelectorAll('.mrow').forEach(r => { const x = sec(r.dataset.sid), on = r.querySelector('.tg').classList.contains('on'), role = r.querySelector('.mrole').value;
         const m = x.members.find(y => y.p === p); let ch = false;
         if (on && !m) { x.members.push({p, role}); ch = true; }
@@ -709,11 +826,60 @@ document.addEventListener('click', e => {
         if (ch) P.section(x); });
       closeSheet(); toast('تم الحفظ'); return render(); }
     case 'mTog': el.classList.toggle('on'); return;
+    case 'groupMsg': gm = {kind:'fatiha', act:'fatiha'}; return formGroup();
+    case 'sendWa': return openExt('https://wa.me/?text=' + encodeURIComponent($('#gText').value));
+    case 'sendViber': return openExt('viber://forward?text=' + encodeURIComponent($('#gText').value));
+    case 'forgot': return formForgot();
+    case 'sendForgot': { const n = $('#fName').value.trim(), raw = $('#fPhone').value;
+      if (!n || raw.replace(/\D/g,'').length < 7) return toast('اكتب الاسم ورقم الهاتف');
+      const p = toE164(raw), r = {name:n, phone:p, ts:Date.now()};
+      const done = () => openSheet(`<div class="h2">وصل طلبك</div><p class="hint" style="font-size:15px">سيصلك رمز سري جديد على الواتساب خلال ٢٤ ساعة إن شاء الله.</p><button class="btn" data-do="closeSheet">حسناً</button>`);
+      if (!LIVE) { S.resets = (S.resets||[]).filter(x => x.phone !== p).concat(r); save(); return done(); }
+      el.disabled = true; FB.F.setDoc(D('resets', p), r).then(done).catch(err => { el.disabled = false; toast('تعذّر إرسال الطلب: ' + (err.code||'')); }); return; }
+    case 'closeSheet': return closeSheet();
+    case 'resetPin': return formReset(d.p, d.n);
+    case 'doReset': { const p = d.p, name = d.n, pin = $('#rPin').value.trim().replace(/[٠-٩]/g, x => '٠١٢٣٤٥٦٧٨٩'.indexOf(x));
+      if (!/^\d{4,6}$/.test(pin)) return toast('الرمز من ٤ إلى ٦ أرقام');
+      if (!LIVE) { S.resets = (S.resets||[]).filter(x => x.phone !== p); save(); render(); return sentReset(p, name, pin); }
+      el.disabled = true; el.textContent = 'جارٍ الحفظ…';
+      (async () => {
+        const A = FB.A, F = FB.F;
+        let ver = 0; const g = await F.getDoc(D('logins', p)); if (g.exists()) ver = g.data().ver || 0;
+        if (!FB.auth2) FB.auth2 = A.getAuth(FB.appM.initializeApp(FIREBASE_CONFIG, 'reset'));
+        let nv = ver + 1, ok = false;
+        for (let i = 0; i < 6 && !ok; i++) {
+          try { await A.createUserWithEmailAndPassword(FB.auth2, emailFor(p, nv), 'ajr#' + pin); ok = true; }
+          catch(err) { if (err.code === 'auth/email-already-in-use') nv++; else throw err; } }
+        if (!ok) throw {code:'too-many-versions'};
+        await A.signOut(FB.auth2).catch(() => {});
+        await F.setDoc(D('logins', p), {ver: nv});
+        await F.deleteDoc(D('resets', p)).catch(() => {});
+      })().then(() => sentReset(p, name, pin)).catch(err => { el.disabled = false; el.textContent = 'حفظ الرمز الجديد'; toast('تعذّر تغيير الرمز: ' + (err.code||'')); });
+      return; }
+    case 'saveLog': { const l = S.logs.find(x => x.id === d.id); if (!l) return closeSheet();
+      const q = Math.max(1, parseInt($('#eQty').value, 10) || 1);
+      Object.assign(l, {a:$('#eAct').value, q, s:$('#eSec').value, anon:$('#eAnon').classList.contains('on')}); P.log(l);
+      closeSheet(); toast('تم تعديل الإهداء'); return render(); }
+    case 'delLog': if (!confirmTwice(el, 'اضغط مرة أخرى لتأكيد الحذف')) return;
+      S.logs = S.logs.filter(x => x.id !== d.id); P.delLog(d.id); closeSheet(); toast('حُذف الإهداء'); return render();
+    case 'juzDone': { const s = sec(view.id), k = S.khatma[s.id], j = k.juz[d.n]; j.done = true;
+      const L = {id:uid(), s:s.id, d:'all', a:'juz', q:1, p:j.p, anon:false, ts:Date.now(), juz:+d.n, round:k.round}; S.logs.push(L); P.log(L);
+      if (Object.values(k.juz).filter(x=>x.done).length === 30) { k.history = (k.history||0)+1; k.round++; k.juz = {}; }
+      P.khatma(s); closeSheet(); return render(); }
+    case 'juzUndo': case 'juzFree': { const s = sec(view.id), k = S.khatma[s.id], j = k.juz[d.n];
+      if (j && j.done) { const L = S.logs.filter(l => l.s === s.id && l.a === 'juz' && l.juz === +d.n && l.p === j.p && (l.round || k.round) === k.round).sort((a,b) => b.ts - a.ts)[0];
+        if (L) { S.logs = S.logs.filter(x => x.id !== L.id); P.delLog(L.id); } }
+      if (d.do === 'juzUndo') j.done = false; else delete k.juz[d.n];
+      P.khatma(s); closeSheet(); toast('تم'); return render(); }
+    case 'delAct': if (!confirmTwice(el, 'اضغط مرة أخرى لتأكيد الحذف')) return;
+      S.acts = S.acts.filter(a => a.id !== d.id); P.config(); closeSheet(); return render();
     case 'delMember': { const s = sec(view.id); s.members = s.members.filter(x=>x.p!==d.p); P.section(s); closeSheet(); return render(); }
     case 'addAct': return formAct();
     case 'saveAct': { const n = $('#aName').value.trim(), u = $('#aUnit').value.trim() || 'مرة'; if (!n) return toast('اكتب اسم العمل');
       const icon = (document.querySelector('[data-icon].on')||{}).dataset.icon || 'star';
-      S.acts.push({id:'a'+uid(), name:n, unit:u, icon, kw:[n]}); P.config(); closeSheet(); toast('أُضيف العمل لكل الصفحات'); return render(); }
+      if (d.id) { const a = S.acts.find(x => x.id === d.id); Object.assign(a, {name:n, unit:u, icon}); if (!(a.kw||[]).includes(n)) a.kw = (a.kw||[]).concat(n); }
+      else S.acts.push({id:'a'+uid(), name:n, unit:u, icon, kw:[n]});
+      P.config(); closeSheet(); toast(d.id ? 'تم التعديل' : 'أُضيف العمل لكل الصفحات'); return render(); }
     case 'addAdmin': openSheet(`<div class="h2">مدير جديد للمشروع</div><div class="field"><label>الاسم</label><input id="adName"></div><div class="field"><label>رقم الهاتف</label><input id="adPhone" dir="ltr" inputmode="tel"></div><button class="btn" data-do="saveAdmin">حفظ</button>`); return;
     case 'saveAdmin': { const n = $('#adName').value.trim(), raw = $('#adPhone').value; if (!n || raw.replace(/\D/g,'').length<7) return toast('اكتب الاسم ورقم الهاتف');
       const p = toE164(raw); S.users[p] = S.users[p] || {name:n}; if (!S.admins.includes(p)) S.admins.push(p); P.user(p); P.config(); closeSheet(); return render(); }
@@ -728,6 +894,7 @@ document.addEventListener('click', e => {
 document.addEventListener('change', e => {
   if (e.target.dataset.photo && e.target.files[0]) readPhoto(e.target.files[0], e.target.dataset.photo);
   if (e.target.id === 'mPick' && e.target.value) formMember(sec(view.id), e.target.value, view.id);
+  if (e.target.id === 'gAct') { gm.act = e.target.value; const t = $('#gText'); if (t) t.value = tplText('act', sec(view.id), gm.act); }
   if (e.target.id === 'remDay') { S.reminders.day = e.target.value; save(); }
 });
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'quickIn') doQuick(); });
