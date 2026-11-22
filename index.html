@@ -261,7 +261,7 @@ function seed(){
 }
 let S, me = null;
 if (LIVE) S = {v:1, acts:[], sections:[], users:{}, admins:[], logs:[], khatma:{}, resets:[], ready:false};
-else { try { S = JSON.parse(localStorage.getItem(LS)) } catch(e) {} if (!S || S.v !== 1) S = seed(); S.ready = true; if (typeof migrateActs === 'function') migrateActs(); try { me = localStorage.getItem(SS) } catch(e) {} }
+else { try { S = JSON.parse(localStorage.getItem(LS)) } catch(e) {} if (!S || S.v !== 1) S = seed(); S.ready = true; try { me = localStorage.getItem(SS) } catch(e) {} }
 try { S.reminders = JSON.parse(localStorage.getItem(REM)) || {on:true, day:'thu'} } catch(e) { S.reminders = {on:true, day:'thu'} }
 const save = () => { try { localStorage.setItem(REM, JSON.stringify(S.reminders)); if (!LIVE) localStorage.setItem(LS, JSON.stringify(S)) } catch(e) {} };
 const toE164 = raw => { let d = String(raw).replace(/[^\d+]/g, ''); if (d.startsWith('00')) d = '+' + d.slice(2); if (d.startsWith('+')) return d; if (d.startsWith('0')) d = d.slice(1); return COUNTRY_CODE + d; };
@@ -324,12 +324,22 @@ function subscribe(){
     if (isPA() && migrateActs()) P.config();
     if (isPA() !== wasPA) { wasPA = isPA(); subSections(); subResets(); } later(); }, fbErr));
   unsubs.push(F.onSnapshot(F.collection(FB.db, 'users'), q => { q.forEach(d => S.users[d.id] = d.data()); later(); }, fbErr));
-  unsubs.push(F.onSnapshot(F.collection(FB.db, 'logs'), q => { S.logs = q.docs.map(d => d.data()); later(); }, fbErr));
+  unsubs.push(F.onSnapshot(F.collection(FB.db, 'logs'), q => { S.logs = q.docs.map(d => d.data()); if (isPA()) migrateLogs(); later(); }, fbErr));
 }
 const isCounter = a => !!a.counter || a.id === 'tasbih' || /صلا[ةه] على (محمد|النبي)|صلوات|تسبيح|ذكر|استغفار/.test(a.name || '');
+function customSalawat(){ return S.acts.find(a => a.id !== 'salawat' && /صلا[ةه] على محمد/.test(a.name || '')); }
+function migrateLogs(){
+  const c = customSalawat(); if (!c) return;
+  S.logs.forEach(l => { if (l.a === 'salawat') { l.a = c.id; P.log(l); } });
+}
 function migrateActs(){
-  let ch = false; const fresh = seed().acts;
-  if (!S.acts.some(a => a.id === 'salawat')) { const i = S.acts.findIndex(a => a.id === 'tasbih'); S.acts.splice(i < 0 ? S.acts.length : i + 1, 0, fresh.find(a => a.id === 'salawat')); ch = true; }
+  let ch = false; const fresh = seed().acts, c = customSalawat();
+  if (c) {
+    if (S.acts.some(a => a.id === 'salawat')) { S.acts = S.acts.filter(a => a.id !== 'salawat'); ch = true; }
+    const kw = fresh.find(a => a.id === 'salawat').kw, merged = [...new Set((c.kw || []).concat(kw))];
+    if (merged.length !== (c.kw || []).length || !c.counter) { c.kw = merged; c.counter = true; ch = true; }
+  }
+  else if (!S.acts.some(a => a.id === 'salawat')) { const i = S.acts.findIndex(a => a.id === 'tasbih'); S.acts.splice(i < 0 ? S.acts.length : i + 1, 0, fresh.find(a => a.id === 'salawat')); ch = true; }
   for (const id of ['tasbih', 'salat']) { const a = S.acts.find(x => x.id === id), f = fresh.find(x => x.id === id);
     if (a && f && (JSON.stringify(a.kw) !== JSON.stringify(f.kw) || a.counter !== f.counter)) { a.kw = f.kw; if (f.counter) a.counter = true; ch = true; } }
   return ch;
@@ -913,7 +923,7 @@ document.addEventListener('change', e => {
   if (e.target.id === 'remDay') { S.reminders.day = e.target.value; save(); }
 });
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'quickIn') doQuick(); });
-if (LIVE) { render(); initFirebase(); } else render();
+if (LIVE) { render(); initFirebase(); } else { if (migrateActs()) save(); migrateLogs(); render(); }
 </script>
 </body>
 </html>
